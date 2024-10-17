@@ -6,7 +6,7 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from logger import logger
 from langchain_core.documents import Document
-from langchain_community.document_loaders import UnstructuredFileLoader
+from langchain_unstructured import UnstructuredLoader
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores.faiss import FAISS
 from langchain_community.vectorstores.utils import DistanceStrategy
@@ -38,7 +38,7 @@ def load_documents(upload_file: str):
         loader = RapidOCRDocLoader(upload_file)
         documents = loader.load()
     elif ext == '.txt':
-        loader = UnstructuredFileLoader(upload_file, autodetect_encoding=True)
+        loader = UnstructuredLoader(upload_file, autodetect_encoding=True)
         documents = loader.load()
     elif ext == '.md':
         documents = load_markdown(upload_file)
@@ -72,7 +72,8 @@ def embedding_documents(upload_file, documents):
     vector_db = FAISS.from_documents(documents, embedding_model,
         distance_strategy=DistanceStrategy.EUCLIDEAN_DISTANCE, relevance_score_fn=custom_relevance_score_fn)
     file_basename = os.path.basename(upload_file)
-    vector_db_key = f"{file_basename}({human_readable_size(upload_file)})"
+    # vector_db_key = f"{file_basename}({human_readable_size(upload_file)})"
+    vector_db_key = upload_file
     if vector_db_key in vector_db_dict.keys():
         del vector_db_dict[vector_db_key]
     vector_db_dict[vector_db_key] = vector_db

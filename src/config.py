@@ -24,6 +24,6 @@ rerank_model_full = f"{model_path}/{rerank_model_name}"
 max_new_tokens=8192
 top_p=0.1
 # temperature=0.1
-
+chunk_size=300
 embedding_top_k=10
 rerank_top_k=3

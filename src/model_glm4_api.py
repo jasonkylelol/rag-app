@@ -22,7 +22,7 @@ def glm4_api_stream_chat(query, history, **generate_kwargs: Any):
         messages.extend(history)
     messages.append({"role":"user","content":query})
     temperature = generate_kwargs.get("temperature", 0.1)
-    logger.info(f"Using model: {model}")
+    # logger.info(f"Using model: {model}")
     response = client.chat.completions.create(
         model=model,
         messages=messages,

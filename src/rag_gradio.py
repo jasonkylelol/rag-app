@@ -13,7 +13,7 @@ from model_glm4_api import load_glm4_api, glm4_api_stream_chat
 from config import (
     device, model_full, model_name, max_new_tokens,
     embedding_model_name, rerank_model_name,
-    embedding_top_k, rerank_top_k, server_port
+    embedding_top_k, rerank_top_k, server_port, chunk_size
 )
 from knowledge_base import (
     init_embeddings, init_reranker,
@@ -23,17 +23,17 @@ from knowledge_base import (
 )
 
 model, tokenizer = None, None
-uploading_status = {}
 
 def generate_kb_prompt(chat_history, kb_file, embedding_top_k, rerank_top_k) -> Tuple[str, List, List]:
-    query = chat_history[-1][0]
+    query = chat_history[-1]["content"]
     
     searched_docs = embedding_query(query, kb_file, embedding_top_k)
 
     rerank_docs = rerank_documents(query, searched_docs, rerank_top_k)
 
-    logger.info(f"Query: {query}")
+    logger.info(f"KB Query: {query}")
     if len(rerank_docs) == 0:
+        logger.info(f"KB matched empty documents with: {kb_file}")
         return query, [], []
     knowledge = ""
     for idx, document in enumerate(rerank_docs):
@@ -51,24 +51,8 @@ def generate_kb_prompt(chat_history, kb_file, embedding_top_k, rerank_top_k) -> 
 
 
 def generate_chat_prompt(chat_history) -> Tuple[str, List]:
-    history = chat_history[:-1]
-    query = chat_history[-1][0]
-
-    model_history = []
-    for hist in history:
-        user_msg = hist[0]
-        assistant_msg = hist[1]
-        if isinstance(user_msg, str):
-            model_history.append({"role":"user","content":user_msg})
-            logger.info(f"User: {user_msg}")
-        else:
-            logger.warning(f"Skip user: {user_msg}")
-        if isinstance(assistant_msg, str):
-            model_history.append({"role":"assistant","content":assistant_msg})
-            logger.info(f"Assistant: {assistant_msg}")
-        else:
-            logger.warning(f"Skip assistant: {assistant_msg}")
-    logger.info(f"Query: {query}")
+    model_history = chat_history[:-1]
+    query = chat_history[-1]["content"]
     return query, model_history
 
 
@@ -84,19 +68,27 @@ def generate_query(chat_history, kb_file, embedding_top_k, rerank_top_k):
 
 
 def chat_resp(chat_history, msg):
-    chat_history[-1][1] = msg
+    if chat_history[-1]["role"] == "assistant":
+        chat_history[-1]["content"] = msg
+    else:
+        chat_history.append({
+            "role": "assistant",
+            "content": "msg"
+        })
     return chat_history
 
 
-def handle_chat(chat_history, kb_file, temperature, embedding_top_k=embedding_top_k, rerank_top_k=rerank_top_k):
-    if kb_file is not None and not check_kb_exist(kb_file):
-        err = f"文件: {kb_file} 不存在"
+def handle_chat(chat_history, temperature, embedding_top_k=embedding_top_k, rerank_top_k=rerank_top_k):
+    kb_file, err = build_knowledge(chat_history)
+    if err:
         logger.error(f"[handle_chat] err: {err}")
         yield chat_resp(chat_history, err)
         return
     
-    logger.info(f"Handle chat: temperature: {temperature} "
+    logger.info(f"Handle chat: kb_file: {kb_file} temperature: {temperature} "
         f"embedding_top_k: {embedding_top_k} rerank_top_k: {rerank_top_k}")
+    
+    # print(f"chat_history:\n\n{chat_history}\n")
 
     query, history, searched_docs = generate_query(chat_history, kb_file, embedding_top_k, rerank_top_k)
     
@@ -123,6 +115,8 @@ def handle_chat(chat_history, kb_file, temperature, embedding_top_k=embedding_to
         generated_text += f"<details><summary>参考信息</summary>{knowledge}</details>"
         yield chat_resp(chat_history, generated_text)
 
+    # print(f"chat_history:\n\n{chat_history}\n\n\n\n")
+
 
 def init_llm():
     global model, tokenizer
@@ -138,56 +132,58 @@ def init_llm():
         raise RuntimeError(f"{model_name} is not support")
 
 
-def handle_upload_file(upload_file: str, chunk_size: int):
-    global uploading_status
-    if not upload_file:
-        logger.error("invalid upload_file")
-        return
+def build_knowledge(chat_history):
+    file_path = None
+    for item in reversed(chat_history):
+        if item["role"] == "user" and isinstance(item["content"], tuple):
+            for path in item["content"]:
+                file_path = path
+            break
+    if file_path is None:
+        logger.info(f"Knowledge not found in chat_history")
+        return None, None
+    if check_kb_exist(file_path):
+        logger.info(f"Knowledge {file_path} found in existing data")
+        return file_path, None
+    err = handle_upload_file(file_path, chunk_size=chunk_size)
+    if err:
+        return "", err
+    return file_path, None
 
+
+def handle_upload_file(upload_file: str, chunk_size: int):
     logger.info(f"Handle file: {upload_file}")
     file_basename = os.path.basename(upload_file)
 
-    uploading_status[file_basename] = "正在加载文件..."
     documents = load_documents(upload_file)
     if isinstance(documents, str):
-        logger.error(documents)
-        uploading_status[file_basename] = documents
-        return
+        err = documents
+        logger.error(err)
+        return err
 
-    uploading_status[file_basename] = "正在拆分文件..."
+    logger.info(f"Splitting file: {upload_file} ...")
     documents = split_documents(file_basename, documents, chunk_size)
 
-    uploading_status[file_basename] = f"拆分文件为{len(documents)}份，正在向量化..."
-    vector_db_key = embedding_documents(upload_file, documents)
+    logger.info(f"Split file to {len(documents)} chunks, embedding...")
+    embedding_documents(upload_file, documents)
 
-    uploading_status[file_basename] = f"拆分文件为{len(documents)}份，向量化成功"
-    logger.info(f"[chinese_rec_text_splitter] [{vector_db_key}] "
-        f"chunk_size: {chunk_size} chunks: {len(documents)}")
-
-
-def doc_loaded():
-    return gr.Radio(choices=list_kb_keys(), label="可供选择的文件:")
+    logger.info(f"Embedding succeed, chunk_size: {chunk_size}")
 
 
 def handle_add_msg(query, chat_history):
-    # logger.info(query, chat_history)
+    # print(f"query:\n\n{query}\n")
+    # print(f"chat_history:\n\n{chat_history}\n")
     for x in query["files"]:
-        chat_history.append(((x,), None))
+        chat_history.append({
+            "role": "user",
+            "content": {"path": x},
+        })
     if query["text"] is not None:
-        chat_history.append((query["text"], None))
+        chat_history.append({
+            "role": "user",
+            "content": query["text"],
+        })
     return gr.MultimodalTextbox(value=None, interactive=False), chat_history
-    # return gr.Textbox(value=None, interactive=False), chat_history + [[query, None]]
-
-
-def uploading_stat():
-    # logging.info(uploading_files)
-    if len(uploading_status) == 0:
-        return ""
-    status_info = ""
-    for k in uploading_status.keys():
-        v = uploading_status.get(k)
-        status_info = f"{status_info}{k}:&emsp;&emsp;{v}  \n"
-    return status_info.rstrip()
 
 
 def init_blocks():
@@ -199,36 +195,23 @@ def init_blocks():
                     f"- embeddings: {embedding_model_name}  \n"
                     f"- rerank: {rerank_model_name}  \n"
                     f"- 支持 txt, pdf, docx, markdown")
-                # upload_file = gr.File(file_types=[".text"], label="对话文件")
-                upload_file = gr.UploadButton("对话文件上传")
-                upload_stat = gr.Markdown(value=uploading_stat, every=0.5)
                 with gr.Row():
-                    chunk_size = gr.Number(value=300, minimum=100, maximum=1000, label="chunk_size")
-                    # chunk_overlap = gr.Number(value=50, minimum=10, maximum=500, label="chunk_overlap")
                     temperature = gr.Number(value=0.1, minimum=0.01, maximum=0.99, label="temperature")
-                # with gr.Row():
-                    # embedding_top_k = gr.Number(value=15, minimum=5, maximum=100, label="embedding_top_k")
-                    # rerank_top_k = gr.Number(value=3, minimum=1, maximum=5, label="rerank_top_k")
-            with gr.Column(scale=5):
-                query_doc = doc_loaded()
-                chatbot = gr.Chatbot(label="chat", show_label=False)
+                    gr.Button(value="666")
+            with gr.Column(scale=3):
+                chatbot = gr.Chatbot(label="chat", show_label=False, type="messages", min_height=600)
                 with gr.Row():
                     query = gr.MultimodalTextbox(label="chat with picture", show_label=False, scale=4)
-                    clear = gr.ClearButton(value="清空聊天记录", components=[query, chatbot], scale=1)
+                    gr.ClearButton(value="清空聊天记录", components=[query, chatbot], scale=1)
         
         query.submit(
             handle_add_msg, inputs=[query, chatbot], outputs=[query, chatbot]).then(
-            handle_chat, inputs=[chatbot, query_doc, temperature], outputs=[chatbot]).then(
+            handle_chat, inputs=[chatbot, temperature], outputs=[chatbot]).then(
             lambda: gr.MultimodalTextbox(interactive=True), outputs=[query])
-        upload_file.upload(
-            handle_upload_file, inputs=[upload_file, chunk_size], show_progress="full").then(
-            doc_loaded, outputs=query_doc)
-        app.load(doc_loaded, outputs=query_doc)
 
     return app
 
 
-# nohup langchain_demo/rag/svc_start.sh > logs.txt 2>&1 &
 if __name__ == "__main__":
     init_embeddings()
     init_reranker()
@@ -236,4 +219,4 @@ if __name__ == "__main__":
 
     app = init_blocks()
     app.queue(max_size=10).launch(server_name='0.0.0.0', server_port=server_port, show_api=False,
-        share=False, favicon_path="/root/github/llm-demo/icons/shiba.svg")
+        share=False, favicon_path="icons/shiba.svg")
