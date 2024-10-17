@@ -1,19 +1,17 @@
-import sys, os
+import sys, os, re, copy
 from typing import Tuple, List
 import gradio as gr
-import signal
 
 sys.path.append(f"{os.path.dirname(__file__)}/..")
 
-from utils import md5sum_str
 from logger import logger
-from model_llama3 import load_llama3, llama3_stream_chat
 from model_glm4 import load_glm4, glm4_stream_chat
 from model_glm4_api import load_glm4_api, glm4_api_stream_chat
 from config import (
     device, model_full, model_name, max_new_tokens,
     embedding_model_name, rerank_model_name,
-    embedding_top_k, rerank_top_k, server_port, chunk_size
+    embedding_top_k, rerank_top_k, server_port, chunk_size,
+    history_dialog_limit
 )
 from knowledge_base import (
     init_embeddings, init_reranker,
@@ -26,44 +24,76 @@ model, tokenizer = None, None
 
 def generate_kb_prompt(chat_history, kb_file, embedding_top_k, rerank_top_k) -> Tuple[str, List, List]:
     query = chat_history[-1]["content"]
-    
-    searched_docs = embedding_query(query, kb_file, embedding_top_k)
+    # logger.info(f"KB query: {query}")
+    new_query = regenerate_question(chat_history)
+    searched_docs = embedding_query(new_query, kb_file, embedding_top_k)
+    rerank_docs = rerank_documents(new_query, searched_docs, rerank_top_k)
 
-    rerank_docs = rerank_documents(query, searched_docs, rerank_top_k)
-
-    logger.info(f"KB Query: {query}")
     if len(rerank_docs) == 0:
         logger.info(f"KB matched empty documents with: {kb_file}")
         return query, [], []
+    
     knowledge = ""
     for idx, document in enumerate(rerank_docs):
         knowledge = f"{knowledge}\n\n{document.page_content}"
     knowledge = knowledge.strip()
-    logger.info(f"Knowledge:\n{knowledge}")
+    # logger.info(f"KB knowledge:\n{knowledge}")
 
-    kb_query = ("<指令>根据已知信息，简洁和专业的来回答问题。如果无法从中得到答案，"
-        "请说 “根据已知信息无法回答该问题”，不允许在答案中添加编造成分，答案请使用中文。</指令>\n"
-        f"<已知信息>{knowledge}</已知信息>\n<问题>{query}</问题>")
-    # kb_query = ("根据以下背景知识回答问题，回答中不要出现（根据上文，根据背景知识，根据文档）等文案，"
-    #     "如果问题与背景知识不相关，或无法从中得到答案，请说“根据已知信息无法回答该问题”，不允许在答案中添加编造成分，答案请使用中文。\n"
-    #     f"背景知识: \n\n{knowledge}\n\n问题: {query}")
-    return kb_query, rerank_docs, []
+    system_prompt = (f"你是擅长回答问题的智能助手，使用提供的已知信息来回答问题。如果你不知道答案，就说不知道。请保持答案简洁和准确。\n以下是已知信息:{knowledge}")
+    history = build_kb_history(chat_history, system_prompt)
+    return query, rerank_docs, history
+
+
+def regenerate_question(chat_history):
+    system_prompt = "给定一个聊天记录和与聊天记录有关的用户问题，重新生成一个独立的问题，该问题囊括了聊天记录的关键信息，使得该问题无需聊天记录即可理解。不要回答此问题，只需重新表述此问题，如果无法表述就按原样返回。"
+    
+    query = chat_history[-1]["content"]
+    history = build_kb_history(chat_history, system_prompt)
+    if len(history) <= 1:
+        return query
+    
+    temperature = 0.1
+    if "glm-4-api" == model_name:
+        streamer = glm4_api_stream_chat(query, history, temperature=temperature)
+    elif "glm-4" in model_name.lower():
+        streamer = glm4_stream_chat(query, history, model, tokenizer,
+            temperature=temperature, max_new_tokens=max_new_tokens)
+    new_query = ""
+    for new_token in streamer:
+        new_query += new_token
+    logger.info(f"KB new query: {new_query}")
+    return new_query
+
+
+def build_kb_history(chat_history, system_prompt):
+    history = chat_history[:-1]
+    history = [item for item in history if not isinstance(item["content"], tuple)]
+    history = history[-history_dialog_limit:]
+    history = copy.deepcopy(history)
+    pattern = r'<details>.*?</details>'
+    for item in history:
+        if item["content"] != "":
+            item["content"] = re.sub(pattern, '', item["content"], flags=re.DOTALL)
+    history.insert(0, {
+        "role": "system",
+        "content": system_prompt,
+    })
+    return history
 
 
 def generate_chat_prompt(chat_history) -> Tuple[str, List]:
-    model_history = chat_history[:-1]
+    history = chat_history[:-1]
+    history = history[-history_dialog_limit:]
     query = chat_history[-1]["content"]
-    return query, model_history
+    return query, [], history
 
 
 def generate_query(chat_history, kb_file, embedding_top_k, rerank_top_k):
     if kb_file is None:
-        query, history = generate_chat_prompt(chat_history)
-        searched_docs = []
-        # yield chat_resp(chat_history, "需要选择文件")
-        # return
+        query, searched_docs, history = generate_chat_prompt(chat_history)
     else:
-        query, searched_docs, history = generate_kb_prompt(chat_history, kb_file, embedding_top_k, rerank_top_k)
+        query, searched_docs, history = generate_kb_prompt(
+            chat_history, kb_file, embedding_top_k, rerank_top_k)
     return query, history, searched_docs
 
 
@@ -102,9 +132,6 @@ def handle_chat(chat_history, temperature, embedding_top_k=embedding_top_k, rera
     elif "glm-4" in model_name.lower():
         streamer = glm4_stream_chat(query, history, model, tokenizer,
             temperature=temperature, max_new_tokens=max_new_tokens)
-    elif "llama3" in model_name.lower():
-        streamer = llama3_stream_chat(query, history, model, tokenizer,
-            temperature=temperature, max_new_tokens=max_new_tokens)
     else:
         raise RuntimeError(f"f{model_name} is not support")
     
@@ -131,8 +158,6 @@ def init_llm():
         load_glm4_api()
     elif "glm-4" in model_name.lower():
         model, tokenizer = load_glm4(model_full, device)
-    elif "llama3" in model_name.lower():
-        model, tokenizer = load_llama3(model_full, device)
     else:
         raise RuntimeError(f"{model_name} is not support")
 
@@ -163,7 +188,7 @@ def handle_upload_file(upload_file: str, chunk_size: int):
     documents = load_documents(upload_file)
     if isinstance(documents, str):
         err = documents
-        logger.error(err)
+        logger.error(f"Load documents: {err}")
         return err
 
     logger.info(f"Splitting file: {upload_file} ...")

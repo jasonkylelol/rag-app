@@ -27,3 +27,4 @@ top_p=0.1
 chunk_size=300
 embedding_top_k=10
 rerank_top_k=3
+history_dialog_limit=10
