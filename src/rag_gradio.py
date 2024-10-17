@@ -195,9 +195,7 @@ def init_blocks():
                     f"- embeddings: {embedding_model_name}  \n"
                     f"- rerank: {rerank_model_name}  \n"
                     f"- 支持 txt, pdf, docx, markdown")
-                with gr.Row():
-                    temperature = gr.Number(value=0.1, minimum=0.01, maximum=0.99, label="temperature")
-                    gr.Button(value="666")
+                temperature = gr.Number(value=0.1, minimum=0.01, maximum=0.99, label="temperature")
             with gr.Column(scale=3):
                 chatbot = gr.Chatbot(label="chat", show_label=False, type="messages", min_height=600)
                 with gr.Row():
