@@ -73,7 +73,7 @@ def chat_resp(chat_history, msg):
     else:
         chat_history.append({
             "role": "assistant",
-            "content": "msg"
+            "content": msg,
         })
     return chat_history
 
@@ -91,6 +91,11 @@ def handle_chat(chat_history, temperature, embedding_top_k=embedding_top_k, rera
     # print(f"chat_history:\n\n{chat_history}\n")
 
     query, history, searched_docs = generate_query(chat_history, kb_file, embedding_top_k, rerank_top_k)
+    if query.strip() == "":
+        err = "prompt can not be empty"
+        logger.error(f"[handle_chat] err: {err}")
+        yield chat_resp(chat_history, err)
+        return
     
     if "glm-4-api" == model_name:
         streamer = glm4_api_stream_chat(query, history, temperature=temperature)
@@ -199,7 +204,7 @@ def init_blocks():
             with gr.Column(scale=3):
                 chatbot = gr.Chatbot(label="chat", show_label=False, type="messages", min_height=600)
                 with gr.Row():
-                    query = gr.MultimodalTextbox(label="chat with picture", show_label=False, scale=4)
+                    query = gr.MultimodalTextbox(label="chat", show_label=False, scale=4)
                     gr.ClearButton(value="清空聊天记录", components=[query, chatbot], scale=1)
         
         query.submit(
