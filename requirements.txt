@@ -1,0 +1,17 @@
+torch==2.3.1
+transformers==4.44.2
+langchain
+langchain-chroma
+langchain-community
+langchain-huggingface
+langchain-openai
+langchain-text-splitters
+langchain-unstructured
+langchainhub
+openai
+gradio==5.1.0
+python-docx
+pillow
+rapidocr-onnxruntime
+PyMuPDF
+opencv-python

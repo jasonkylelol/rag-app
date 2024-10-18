@@ -39,7 +39,7 @@ def generate_kb_prompt(chat_history, kb_file, embedding_top_k, rerank_top_k) -> 
     knowledge = knowledge.strip()
     # logger.info(f"KB knowledge:\n{knowledge}")
 
-    system_prompt = (f"你是擅长回答问题的智能助手，使用提供的已知信息来回答问题。如果你不知道答案，就说不知道。请保持答案简洁和准确。\n以下是已知信息:{knowledge}")
+    system_prompt = f"你是擅长回答问题的智能助手，使用提供的已知信息来回答问题。如果你不知道答案，就说不知道。请保持答案简洁和准确。\n以下是已知信息:\n\n{knowledge}"
     history = build_kb_history(chat_history, system_prompt)
     return query, rerank_docs, history
 
@@ -53,9 +53,9 @@ def regenerate_question(chat_history):
         return query
     
     temperature = 0.1
-    if "glm-4-api" == model_name:
+    if model_name.startswith("glm-4"):
         streamer = glm4_api_stream_chat(query, history, temperature=temperature)
-    elif "glm-4" in model_name.lower():
+    elif model_name.startswith("THUDM/glm-4"):
         streamer = glm4_stream_chat(query, history, model, tokenizer,
             temperature=temperature, max_new_tokens=max_new_tokens)
     new_query = ""
@@ -67,13 +67,29 @@ def regenerate_question(chat_history):
 
 def build_kb_history(chat_history, system_prompt):
     history = chat_history[:-1]
-    history = [item for item in history if not isinstance(item["content"], tuple)]
+
+    kb_index = None
+    for index in range(len(history)-1, -1, -1):
+        item = history[index]
+        if isinstance(item["content"], tuple):
+            kb_index = index
+            break
+    if kb_index is not None:
+        if kb_index + 1 < len(history):
+            history =  history[index + 1:]
+        else:
+            history = []
+    else:
+        raise RuntimeError(f"KB can not extract history that start from latest knowledge")
+    
+    # history = [item for item in history if not isinstance(item["content"], tuple)]
     history = history[-history_dialog_limit:]
     history = copy.deepcopy(history)
-    pattern = r'<details>.*?</details>'
+    pattern = r"<details>.*?</details>"
     for item in history:
+        del item["metadata"]
         if item["content"] != "":
-            item["content"] = re.sub(pattern, '', item["content"], flags=re.DOTALL)
+            item["content"] = re.sub(pattern, "", item["content"], flags=re.DOTALL)
     history.insert(0, {
         "role": "system",
         "content": system_prompt,
@@ -84,6 +100,9 @@ def build_kb_history(chat_history, system_prompt):
 def generate_chat_prompt(chat_history) -> Tuple[str, List]:
     history = chat_history[:-1]
     history = history[-history_dialog_limit:]
+    history = copy.deepcopy(history)
+    for item in history:
+        del item["metadata"]
     query = chat_history[-1]["content"]
     return query, [], history
 
@@ -117,7 +136,6 @@ def handle_chat(chat_history, temperature, embedding_top_k=embedding_top_k, rera
     
     logger.info(f"Handle chat: kb_file: {kb_file} temperature: {temperature} "
         f"embedding_top_k: {embedding_top_k} rerank_top_k: {rerank_top_k}")
-    
     # print(f"chat_history:\n\n{chat_history}\n")
 
     query, history, searched_docs = generate_query(chat_history, kb_file, embedding_top_k, rerank_top_k)
@@ -127,9 +145,9 @@ def handle_chat(chat_history, temperature, embedding_top_k=embedding_top_k, rera
         yield chat_resp(chat_history, err)
         return
     
-    if "glm-4-api" == model_name:
+    if model_name.startswith("glm-4"):
         streamer = glm4_api_stream_chat(query, history, temperature=temperature)
-    elif "glm-4" in model_name.lower():
+    elif model_name.startswith("THUDM/glm-4"):
         streamer = glm4_stream_chat(query, history, model, tokenizer,
             temperature=temperature, max_new_tokens=max_new_tokens)
     else:
@@ -146,7 +164,6 @@ def handle_chat(chat_history, temperature, embedding_top_k=embedding_top_k, rera
         knowledge = knowledge.strip()
         generated_text += f"<details><summary>参考信息</summary>{knowledge}</details>"
         yield chat_resp(chat_history, generated_text)
-
     # print(f"chat_history:\n\n{chat_history}\n\n\n\n")
 
 
@@ -154,9 +171,9 @@ def init_llm():
     global model, tokenizer
 
     logger.info(f"Load from {model_name}")
-    if "glm-4-api" == model_name:
+    if model_name.startswith("glm-4"):
         load_glm4_api()
-    elif "glm-4" in model_name.lower():
+    elif model_name.startswith("THUDM/glm-4"):
         model, tokenizer = load_glm4(model_full, device)
     else:
         raise RuntimeError(f"{model_name} is not support")
@@ -221,13 +238,13 @@ def init_blocks():
         with gr.Row():
             with gr.Column(scale=1):
                 gr.Markdown("# RAG 🤖  \n"
-                    f"- llm: {model_name}  \n"
-                    f"- embeddings: {embedding_model_name}  \n"
-                    f"- rerank: {rerank_model_name}  \n"
+                    f"- 模型: {model_name}  \n"
+                    # f"- embeddings: {embedding_model_name}  \n"
+                    # f"- rerank: {rerank_model_name}  \n"
                     f"- 支持 txt, pdf, docx, markdown")
                 temperature = gr.Number(value=0.1, minimum=0.01, maximum=0.99, label="temperature")
             with gr.Column(scale=3):
-                chatbot = gr.Chatbot(label="chat", show_label=False, type="messages", min_height=600)
+                chatbot = gr.Chatbot(label="chat", show_label=False, type="messages", min_height=500)
                 with gr.Row():
                     query = gr.MultimodalTextbox(label="chat", show_label=False, scale=4)
                     gr.ClearButton(value="清空聊天记录", components=[query, chatbot], scale=1)

@@ -2,7 +2,7 @@ import os
 from openai import OpenAI
 from typing import List, Optional, Any
 from logger import logger
-from config import api_key, api_model
+from config import model_name, api_key
 
 client, model = None, None
 
@@ -12,8 +12,8 @@ def load_glm4_api():
         api_key=api_key,
         base_url="https://open.bigmodel.cn/api/paas/v4/",
     )
-    model = api_model
-    logger.info(f"Using api model: {api_model}")
+    model = model_name
+    logger.info(f"Using api model: {model}")
 
 
 def glm4_api_stream_chat(query, history, **generate_kwargs: Any):

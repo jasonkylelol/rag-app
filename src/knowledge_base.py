@@ -13,10 +13,9 @@ from langchain_community.vectorstores.utils import DistanceStrategy
 from custom.document_loaders import RapidOCRPDFLoader, RapidOCRDocLoader
 from custom.text_splitter import ChineseRecursiveTextSplitter
 from custom.text_splitter.markdown_splitter import split_markdown_documents, load_markdown
-from config import device, embedding_model_full, rerank_model_full
+from config import device, embedding_model_full, rerank_model_full, embedding_score_threshold
 
 embedding_model = None
-embedding_score_threshold = 0.3
 rerank_model, rerank_tokenizer = None, None
 
 vector_db_dict = {}
