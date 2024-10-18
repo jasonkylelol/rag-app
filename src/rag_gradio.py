@@ -244,7 +244,7 @@ def init_blocks():
                     f"- 支持 txt, pdf, docx, markdown")
                 temperature = gr.Number(value=0.1, minimum=0.01, maximum=0.99, label="temperature")
             with gr.Column(scale=3):
-                chatbot = gr.Chatbot(label="chat", show_label=False, type="messages", min_height=500)
+                chatbot = gr.Chatbot(label="chat", show_label=False, type="messages", min_height=550)
                 with gr.Row():
                     query = gr.MultimodalTextbox(label="chat", show_label=False, scale=4)
                     gr.ClearButton(value="清空聊天记录", components=[query, chatbot], scale=1)

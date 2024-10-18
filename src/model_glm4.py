@@ -25,6 +25,7 @@ def glm4_stream_chat(query, history, model, tokenizer, **generate_kwargs: Any):
     if len(history) > 0:
         messages.extend(history)
     messages.append({"role":"user","content":query})
+    logger.info(f"Chat messages:\n{messages}")
     inputs = tokenizer.apply_chat_template(
         messages,
         add_generation_prompt=True,
@@ -51,10 +52,10 @@ def glm4_stream_chat(query, history, model, tokenizer, **generate_kwargs: Any):
     generate_params = dict(
         input_ids=inputs,
         streamer=streamer,
-        # "max_new_tokens": max_length,
+        # max_new_tokens=max_length,
         do_sample=True,
         # top_p=top_p,
-        # "temperature": temperature,
+        # temperature=temperature,
         stopping_criteria=StoppingCriteriaList([stop]),
         repetition_penalty=1.2,
         eos_token_id=model.config.eos_token_id,
