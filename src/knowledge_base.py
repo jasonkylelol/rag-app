@@ -13,7 +13,7 @@ from langchain_community.vectorstores.utils import DistanceStrategy
 from custom.document_loaders import RapidOCRPDFLoader, RapidOCRDocLoader
 from custom.text_splitter import ChineseRecursiveTextSplitter
 from custom.text_splitter.markdown_splitter import split_markdown_documents, load_markdown
-from config import device, embedding_model_full, rerank_model_full, embedding_score_threshold
+import config
 
 embedding_model = None
 rerank_model, rerank_tokenizer = None, None
@@ -115,7 +115,7 @@ def embedding_query(query, kb_file, embedding_top_k):
         doc = searched_doc[0]
         score = searched_doc[1]
         # print(f"{score} : {doc.page_content}")
-        if score < embedding_score_threshold:
+        if score < config.embedding_score_threshold:
             continue
         docs.append(doc)
     return docs
@@ -124,12 +124,15 @@ def embedding_query(query, kb_file, embedding_top_k):
 def rerank_documents(query, docs, rerank_top_k):
     if len(docs) < 2:
         return docs
+    if not rerank_model:
+        return docs[:rerank_top_k]
+
     pairs = []
     for idx, document in enumerate(docs):
         pairs.append([query, document.page_content])
     rerank_docs = []
     with torch.no_grad():
-        inputs = rerank_tokenizer(pairs, padding=True, truncation=True, return_tensors='pt', max_length=512).to(device)
+        inputs = rerank_tokenizer(pairs, padding=True, truncation=True, return_tensors='pt', max_length=512).to(config.device)
         scores = rerank_model(**inputs, return_dict=True).logits.view(-1, ).float()
         scores = torch.sigmoid(scores)
         scores = scores.tolist()
@@ -148,10 +151,10 @@ def rerank_documents(query, docs, rerank_top_k):
 def init_embeddings():
     global embedding_model
 
-    logger.info(f"Load embedding from {embedding_model_full}")
+    logger.info(f"Load embedding from {config.embedding_model_full}")
     embedding_model = HuggingFaceEmbeddings(
-        model_name=embedding_model_full,
-        model_kwargs={"device": device},
+        model_name=config.embedding_model_full,
+        model_kwargs={"device": config.device},
         encode_kwargs={'normalize_embeddings': True},
     )
 
@@ -159,14 +162,16 @@ def init_embeddings():
 def init_reranker():
     global rerank_model, rerank_tokenizer
 
-    logger.info(f"Load reranker from {rerank_model_full}")
-    rerank_tokenizer = AutoTokenizer.from_pretrained(
-        rerank_model_full,
-        device_map=device)
-    rerank_model = AutoModelForSequenceClassification.from_pretrained(
-        rerank_model_full,
-        device_map=device)
-    rerank_model = rerank_model.eval()
+    logger.info(f"Load reranker from {config.rerank_model_full}")
+
+    if config.rerank_model_full:
+        rerank_tokenizer = AutoTokenizer.from_pretrained(
+            config.rerank_model_full,
+            device_map=config.device)
+        rerank_model = AutoModelForSequenceClassification.from_pretrained(
+            config.rerank_model_full,
+            device_map=config.device)
+        rerank_model = rerank_model.eval()
 
 
 def custom_relevance_score_fn(distance: float) -> float:

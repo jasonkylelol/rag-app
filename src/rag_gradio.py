@@ -1,18 +1,15 @@
 import sys, os, re, copy
 from typing import Tuple, List
 import gradio as gr
+import html
 
 sys.path.append(f"{os.path.dirname(__file__)}/..")
 
 from logger import logger
 from model_glm4 import load_glm4, glm4_stream_chat
+from model_qwen2 import load_qwen2, qwen2_stream_chat
 from model_glm4_api import load_glm4_api, glm4_api_stream_chat
-from config import (
-    device, model_full, model_name, max_new_tokens,
-    embedding_model_name, rerank_model_name,
-    embedding_top_k, rerank_top_k, server_port, chunk_size,
-    history_dialog_limit
-)
+import config
 from knowledge_base import (
     init_embeddings, init_reranker,
     check_kb_exist, list_kb_keys,
@@ -35,7 +32,7 @@ def generate_kb_prompt(chat_history, kb_file, embedding_top_k, rerank_top_k) -> 
     
     knowledge = ""
     for idx, document in enumerate(rerank_docs):
-        knowledge = f"{knowledge}\n\n{document.page_content}"
+        knowledge = f"{knowledge}\n{document.page_content}"
     knowledge = knowledge.strip()
     # logger.info(f"KB knowledge:\n{knowledge}")
 
@@ -53,11 +50,14 @@ def regenerate_question(chat_history):
         return query
     
     temperature = 0.1
-    if model_name.startswith("glm-4"):
+    if config.model_name.startswith("glm-4"):
         streamer = glm4_api_stream_chat(query, history, temperature=temperature)
-    elif model_name.startswith("THUDM/glm-4"):
+    elif config.model_name.startswith("THUDM"):
         streamer = glm4_stream_chat(query, history, model, tokenizer,
-            temperature=temperature, max_new_tokens=max_new_tokens)
+            temperature=temperature, max_new_tokens=config.max_new_tokens)
+    elif config.model_name.startswith("Qwen"):
+        streamer = qwen2_stream_chat(query, history, model, tokenizer,
+            temperature=temperature, max_new_tokens=config.max_new_tokens)
     new_query = ""
     for new_token in streamer:
         new_query += new_token
@@ -83,7 +83,7 @@ def build_kb_history(chat_history, system_prompt):
         raise RuntimeError(f"KB can not extract history that start from latest knowledge")
     
     # history = [item for item in history if not isinstance(item["content"], tuple)]
-    history = history[-history_dialog_limit:]
+    history = history[-config.history_dialog_limit:]
     history = copy.deepcopy(history)
     pattern = r"<details>.*?</details>"
     for item in history:
@@ -99,7 +99,7 @@ def build_kb_history(chat_history, system_prompt):
 
 def generate_chat_prompt(chat_history) -> Tuple[str, List]:
     history = chat_history[:-1]
-    history = history[-history_dialog_limit:]
+    history = history[-config.history_dialog_limit:]
     history = copy.deepcopy(history)
     for item in history:
         del item["metadata"]
@@ -127,7 +127,8 @@ def chat_resp(chat_history, msg):
     return chat_history
 
 
-def handle_chat(chat_history, temperature, embedding_top_k=embedding_top_k, rerank_top_k=rerank_top_k):
+def handle_chat(chat_history, temperature,
+    embedding_top_k=config.embedding_top_k, rerank_top_k=config.rerank_top_k):
     kb_file, err = build_knowledge(chat_history)
     if err:
         logger.error(f"[handle_chat] err: {err}")
@@ -145,13 +146,16 @@ def handle_chat(chat_history, temperature, embedding_top_k=embedding_top_k, rera
         yield chat_resp(chat_history, err)
         return
     
-    if model_name.startswith("glm-4"):
+    if config.model_name.startswith("glm-4"):
         streamer = glm4_api_stream_chat(query, history, temperature=temperature)
-    elif model_name.startswith("THUDM/glm-4"):
+    elif config.model_name.startswith("THUDM"):
         streamer = glm4_stream_chat(query, history, model, tokenizer,
-            temperature=temperature, max_new_tokens=max_new_tokens)
+            temperature=temperature, max_new_tokens=config.max_new_tokens)
+    elif config.model_name.startswith("Qwen"):
+        streamer = qwen2_stream_chat(query, history, model, tokenizer,
+            temperature=temperature, max_new_tokens=config.max_new_tokens)
     else:
-        raise RuntimeError(f"f{model_name} is not support")
+        raise RuntimeError(f"f{config.model_name} is not support")
     
     generated_text = ""
     for new_token in streamer:
@@ -160,8 +164,9 @@ def handle_chat(chat_history, temperature, embedding_top_k=embedding_top_k, rera
     if len(searched_docs) > 0:
         knowledge = ""
         for idx, doc in enumerate(searched_docs):
-            knowledge = f"{knowledge}{doc.page_content}\n\n"
+            knowledge = f"{knowledge}{str(doc.page_content).strip()}\n"
         knowledge = knowledge.strip()
+        knowledge = html.escape(knowledge)
         generated_text += f"<details><summary>参考信息</summary>{knowledge}</details>"
         yield chat_resp(chat_history, generated_text)
     # print(f"chat_history:\n\n{chat_history}\n\n\n\n")
@@ -170,13 +175,15 @@ def handle_chat(chat_history, temperature, embedding_top_k=embedding_top_k, rera
 def init_llm():
     global model, tokenizer
 
-    logger.info(f"Load from {model_name}")
-    if model_name.startswith("glm-4"):
+    logger.info(f"Load from {config.model_name}")
+    if config.model_name.startswith("glm-4"):
         load_glm4_api()
-    elif model_name.startswith("THUDM/glm-4"):
-        model, tokenizer = load_glm4(model_full, device)
+    elif config.model_name.startswith("THUDM"):
+        model, tokenizer = load_glm4(config.model_full, config.device)
+    elif config.model_name.startswith("Qwen"):
+        model, tokenizer = load_qwen2(config.model_full, config.device)
     else:
-        raise RuntimeError(f"{model_name} is not support")
+        raise RuntimeError(f"{config.model_name} is not support")
 
 
 def build_knowledge(chat_history):
@@ -192,7 +199,7 @@ def build_knowledge(chat_history):
     if check_kb_exist(file_path):
         logger.info(f"Knowledge {file_path} found in existing data")
         return file_path, None
-    err = handle_upload_file(file_path, chunk_size=chunk_size)
+    err = handle_upload_file(file_path, chunk_size=config.chunk_size)
     if err:
         return "", err
     return file_path, None
@@ -238,7 +245,7 @@ def init_blocks():
         with gr.Row():
             with gr.Column(scale=1):
                 gr.Markdown("# RAG 🤖  \n"
-                    f"- 模型: {model_name}  \n"
+                    f"- 模型: {config.model_name}  \n"
                     # f"- embeddings: {embedding_model_name}  \n"
                     # f"- rerank: {rerank_model_name}  \n"
                     f"- 支持 txt, pdf, docx, markdown")
@@ -263,5 +270,6 @@ if __name__ == "__main__":
     init_llm()
 
     app = init_blocks()
-    app.queue(max_size=10).launch(server_name='0.0.0.0', server_port=server_port, show_api=False,
+    app.queue(max_size=10).launch(server_name='0.0.0.0',
+        server_port=config.server_port, show_api=False,
         share=False, favicon_path="icons/shiba.svg")
