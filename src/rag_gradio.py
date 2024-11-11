@@ -49,15 +49,7 @@ def regenerate_question(chat_history):
     if len(history) <= 1:
         return query
     
-    temperature = 0.1
-    if config.model_name.startswith("glm-4"):
-        streamer = glm4_api_stream_chat(query, history, temperature=temperature)
-    elif config.model_name.startswith("THUDM"):
-        streamer = glm4_stream_chat(query, history, model, tokenizer,
-            temperature=temperature, max_new_tokens=config.max_new_tokens)
-    elif config.model_name.startswith("Qwen"):
-        streamer = qwen2_stream_chat(query, history, model, tokenizer,
-            temperature=temperature, max_new_tokens=config.max_new_tokens)
+    streamer = get_chat_streamer(query, history, 0.1)
     new_query = ""
     for new_token in streamer:
         new_query += new_token
@@ -146,17 +138,8 @@ def handle_chat(chat_history, temperature,
         yield chat_resp(chat_history, err)
         return
     
-    if config.model_name.startswith("glm-4"):
-        streamer = glm4_api_stream_chat(query, history, temperature=temperature)
-    elif config.model_name.startswith("THUDM"):
-        streamer = glm4_stream_chat(query, history, model, tokenizer,
-            temperature=temperature, max_new_tokens=config.max_new_tokens)
-    elif config.model_name.startswith("Qwen"):
-        streamer = qwen2_stream_chat(query, history, model, tokenizer,
-            temperature=temperature, max_new_tokens=config.max_new_tokens)
-    else:
-        raise RuntimeError(f"f{config.model_name} is not support")
-    
+    streamer = get_chat_streamer(query, history, temperature)
+
     generated_text = ""
     for new_token in streamer:
         generated_text += new_token
@@ -184,6 +167,20 @@ def init_llm():
         model, tokenizer = load_qwen2(config.model_full, config.device)
     else:
         raise RuntimeError(f"{config.model_name} is not support")
+
+
+def get_chat_streamer(query, history, temperature):
+    if config.model_name.startswith("glm-4"):
+        streamer = glm4_api_stream_chat(query, history, temperature=temperature)
+    elif config.model_name.startswith("THUDM"):
+        streamer = glm4_stream_chat(query, history, model, tokenizer,
+            temperature=temperature, max_new_tokens=config.max_new_tokens)
+    elif config.model_name.startswith("Qwen"):
+        streamer = qwen2_stream_chat(query, history, model, tokenizer,
+            temperature=temperature, max_new_tokens=config.max_new_tokens)
+    else:
+        raise RuntimeError(f"f{config.model_name} is not support")
+    return streamer
 
 
 def build_knowledge(chat_history):
