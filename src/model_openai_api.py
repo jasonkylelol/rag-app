@@ -2,21 +2,21 @@ import os
 from openai import OpenAI
 from typing import List, Optional, Any
 from logger import logger
-from config import model_name, api_key
+from config import model_name, api_key, api_model
 
 client, model = None, None
 
-def load_glm4_api():
+def load_openai_api():
     global client, model
     client = OpenAI(
         api_key=api_key,
-        base_url="https://open.bigmodel.cn/api/paas/v4/",
+        base_url=model_name,
     )
-    model = model_name
+    model = api_model
     logger.info(f"Using api model: {model}")
 
 
-def glm4_api_stream_chat(query, history, **generate_kwargs: Any):
+def openai_api_stream_chat(query, history, **generate_kwargs: Any):
     messages = []
     if len(history) > 0:
         messages.extend(history)

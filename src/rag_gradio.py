@@ -8,7 +8,7 @@ sys.path.append(f"{os.path.dirname(__file__)}/..")
 from logger import logger
 from model_glm4 import load_glm4, glm4_stream_chat
 from model_qwen2 import load_qwen2, qwen2_stream_chat
-from model_glm4_api import load_glm4_api, glm4_api_stream_chat
+from model_openai_api import load_openai_api, openai_api_stream_chat
 import config
 from knowledge_base import (
     init_embeddings, init_reranker,
@@ -159,8 +159,8 @@ def init_llm():
     global model, tokenizer
 
     logger.info(f"Load from {config.model_name}")
-    if config.model_name.startswith("glm-4"):
-        load_glm4_api()
+    if config.model_name.startswith("http"):
+        load_openai_api()
     elif config.model_name.startswith("THUDM"):
         model, tokenizer = load_glm4(config.model_full, config.device)
     elif config.model_name.startswith("Qwen"):
@@ -170,8 +170,8 @@ def init_llm():
 
 
 def get_chat_streamer(query, history, temperature):
-    if config.model_name.startswith("glm-4"):
-        streamer = glm4_api_stream_chat(query, history, temperature=temperature)
+    if config.model_name.startswith("http"):
+        streamer = openai_api_stream_chat(query, history, temperature=temperature)
     elif config.model_name.startswith("THUDM"):
         streamer = glm4_stream_chat(query, history, model, tokenizer,
             temperature=temperature, max_new_tokens=config.max_new_tokens)
@@ -246,7 +246,7 @@ def init_blocks():
                     # f"- embeddings: {embedding_model_name}  \n"
                     # f"- rerank: {rerank_model_name}  \n"
                     f"- 支持 txt, pdf, docx, markdown")
-                temperature = gr.Number(value=0.1, minimum=0.01, maximum=0.99, label="temperature")
+                temperature = gr.Number(value=0.1, minimum=0.01, maximum=10.00, label="temperature")
             with gr.Column(scale=3):
                 chatbot = gr.Chatbot(label="chat", show_label=False, type="messages", min_height=550)
                 with gr.Row():

@@ -9,8 +9,12 @@ device="cuda"
 model_path = "/root/huggingface/models"
 
 # model_name = "THUDM/glm-4-9b-chat"
-model_name = "Qwen/Qwen2.5-7B-Instruct"
-# model_name = "glm-4-flash"
+# model_name = "Qwen/Qwen2.5-7B-Instruct"
+# model_name = "https://open.bigmodel.cn/api/paas/v4"
+model_name = "https://api.deepseek.com"
+
+# api_model = "glm-4-flash"
+api_model = "deepseek-chat"
 
 model_full = f"{model_path}/{model_name}"
 
