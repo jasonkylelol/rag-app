@@ -118,6 +118,7 @@ def embedding_query(query, kb_file, embedding_top_k):
         if score < config.embedding_score_threshold:
             continue
         docs.append(doc)
+    logger.info(f"[embedding] fetched {len(docs)} docs")
     return docs
 
 
@@ -145,6 +146,7 @@ def rerank_documents(query, docs, rerank_top_k):
             break
         document = item[0]
         rerank_docs.append(document)
+    logger.info(f"[rerank] fetched {len(rerank_docs)} docs")
     return rerank_docs
 
 
