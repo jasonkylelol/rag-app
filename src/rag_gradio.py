@@ -6,8 +6,6 @@ import html
 sys.path.append(f"{os.path.dirname(__file__)}/..")
 
 from logger import logger
-from model_glm4 import load_glm4, glm4_stream_chat
-from model_qwen2 import load_qwen2, qwen2_stream_chat
 from model_openai_api import load_openai_api, openai_api_stream_chat
 import config
 from knowledge_base import (
@@ -16,8 +14,6 @@ from knowledge_base import (
     embedding_query, rerank_documents, load_documents,
     split_documents, embedding_documents, 
 )
-
-model, tokenizer = None, None
 
 def generate_kb_prompt(chat_history, kb_file, embedding_top_k, rerank_top_k) -> Tuple[str, List, List]:
     query = chat_history[-1]["content"]
@@ -49,9 +45,8 @@ def regenerate_question(chat_history):
     if len(history) <= 1:
         return query
     
-    streamer = get_chat_streamer(query, history, 0.1)
     new_query = ""
-    for new_token in streamer:
+    for new_token in chat_streamer(query, history, 0.1):
         new_query += new_token
     logger.info(f"KB new query: {new_query}")
     return new_query
@@ -137,13 +132,13 @@ def handle_chat(chat_history, temperature,
         logger.error(f"[handle_chat] err: {err}")
         yield chat_resp(chat_history, err)
         return
-    
-    streamer = get_chat_streamer(query, history, temperature)
 
     generated_text = ""
-    for new_token in streamer:
+    for new_token in chat_streamer(query, history, temperature):
+        # print(new_token)
         generated_text += new_token
         yield chat_resp(chat_history, generated_text)
+    print(generated_text)
     if len(searched_docs) > 0:
         knowledge = ""
         for idx, doc in enumerate(searched_docs):
@@ -156,31 +151,14 @@ def handle_chat(chat_history, temperature,
 
 
 def init_llm():
-    global model, tokenizer
-
-    logger.info(f"Load from {config.model_name}")
-    if config.model_name.startswith("http"):
-        load_openai_api()
-    elif config.model_name.startswith("THUDM"):
-        model, tokenizer = load_glm4(config.model_full, config.device)
-    elif config.model_name.startswith("Qwen"):
-        model, tokenizer = load_qwen2(config.model_full, config.device)
-    else:
-        raise RuntimeError(f"{config.model_name} is not support")
+    load_openai_api()
 
 
-def get_chat_streamer(query, history, temperature):
-    if config.model_name.startswith("http"):
-        streamer = openai_api_stream_chat(query, history, temperature=temperature)
-    elif config.model_name.startswith("THUDM"):
-        streamer = glm4_stream_chat(query, history, model, tokenizer,
-            temperature=temperature, max_new_tokens=config.max_new_tokens)
-    elif config.model_name.startswith("Qwen"):
-        streamer = qwen2_stream_chat(query, history, model, tokenizer,
-            temperature=temperature, max_new_tokens=config.max_new_tokens)
-    else:
-        raise RuntimeError(f"f{config.model_name} is not support")
-    return streamer
+def chat_streamer(query, history, temperature):
+    for chunk in openai_api_stream_chat(query, history, temperature=temperature):
+        if chunk == "<think>" or chunk == "</think>":
+            continue
+        yield chunk
 
 
 def build_knowledge(chat_history):
@@ -242,7 +220,7 @@ def init_blocks():
         with gr.Row():
             with gr.Column(scale=1):
                 gr.Markdown("# RAG 🤖  \n"
-                    f"- 模型: {config.model_name}  \n"
+                    f"- 模型: {config.api_model}  \n"
                     # f"- embeddings: {embedding_model_name}  \n"
                     # f"- rerank: {rerank_model_name}  \n"
                     f"- 支持 txt, pdf, docx, markdown")

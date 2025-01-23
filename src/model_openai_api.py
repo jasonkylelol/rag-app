@@ -2,18 +2,17 @@ import os
 from openai import OpenAI
 from typing import List, Optional, Any
 from logger import logger
-from config import model_name, api_key, api_model
+from config import api_base, api_key, api_model, max_new_tokens
 
-client, model = None, None
+client = None
 
 def load_openai_api():
-    global client, model
+    global client
     client = OpenAI(
         api_key=api_key,
-        base_url=model_name,
+        base_url=api_base,
     )
-    model = api_model
-    logger.info(f"Using api model: {model}")
+    logger.info(f"Using api base: {api_base}, model: {api_model}")
 
 
 def openai_api_stream_chat(query, history, **generate_kwargs: Any):
@@ -24,18 +23,20 @@ def openai_api_stream_chat(query, history, **generate_kwargs: Any):
     temperature = generate_kwargs.get("temperature", 0.1)
     logger.info(f"Chat messages:\n{messages}")
     response = client.chat.completions.create(
-        model=model,
+        model=api_model,
         messages=messages,
         temperature=temperature,
+        max_tokens=max_new_tokens,
         stream=True,
     )
 
     for idx, chunk in enumerate(response):
-        # print(f"Chunk received, value: {chunk}")
         chunk_message = chunk.choices[0].delta
         if not chunk_message.content:
             continue
-        chunk_content = chunk_message.content
+        chunk_content = chunk_message.content.strip()
+        if chunk_content == "":
+            continue
 
         yield chunk_content
 
