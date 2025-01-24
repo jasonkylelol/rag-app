@@ -134,9 +134,9 @@ def handle_chat(chat_history, temperature,
         return
 
     generated_text = ""
-    for new_token in chat_streamer(query, history, temperature):
-        # print(new_token)
-        generated_text += new_token
+    for chunk in chat_streamer(query, history, temperature):
+        # print(f"chunk: {chunk}")
+        generated_text += chunk
         yield chat_resp(chat_history, generated_text)
     print(generated_text)
     if len(searched_docs) > 0:

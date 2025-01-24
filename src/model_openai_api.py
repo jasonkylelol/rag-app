@@ -31,11 +31,9 @@ def openai_api_stream_chat(query, history, **generate_kwargs: Any):
     )
 
     for idx, chunk in enumerate(response):
-        chunk_message = chunk.choices[0].delta
-        if not chunk_message.content:
-            continue
-        chunk_content = chunk_message.content.strip()
-        if chunk_content == "":
+        chunk_content = chunk.choices[0].delta.content
+
+        if not chunk_content:
             continue
 
         yield chunk_content
