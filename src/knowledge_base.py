@@ -1,27 +1,35 @@
 import sys, os
 import re, math
-
-import torch
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
+import requests, json
+from yarl import URL
+import httpx
+from pydantic import BaseModel
 
 from logger import logger
 from langchain_core.documents import Document
 from langchain_unstructured import UnstructuredLoader
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores.faiss import FAISS
 from langchain_community.vectorstores.utils import DistanceStrategy
 from custom.document_loaders import RapidOCRPDFLoader, RapidOCRDocLoader
 from custom.text_splitter import ChineseRecursiveTextSplitter
 from custom.text_splitter.markdown_splitter import split_markdown_documents, load_markdown
-import config
+from langchain_openai.embeddings.base import OpenAIEmbeddings
 
-embedding_model = None
-rerank_model, rerank_tokenizer = None, None
+from config import (
+    api_base, api_key, api_embedding, api_rerank, embedding_score_threshold, rerank_top_k
+)
 
 vector_db_dict = {}
+embedding_model = None
+
+class RerankDocument(BaseModel):
+    index: int
+    text: str
+    score: float
 
 def check_kb_exist(kb_file):
     return True if kb_file in vector_db_dict.keys() else False
+
 
 def list_kb_keys():
     return vector_db_dict.keys()
@@ -69,8 +77,9 @@ def split_documents(file_basename, documents: list, chunk_size: int):
 def embedding_documents(upload_file, documents):
     global vector_db_dict
     vector_db = FAISS.from_documents(documents, embedding_model,
-        distance_strategy=DistanceStrategy.EUCLIDEAN_DISTANCE, relevance_score_fn=custom_relevance_score_fn)
-    file_basename = os.path.basename(upload_file)
+        distance_strategy=DistanceStrategy.EUCLIDEAN_DISTANCE,
+        relevance_score_fn=custom_relevance_score_fn)
+    # file_basename = os.path.basename(upload_file)
     # vector_db_key = f"{file_basename}({human_readable_size(upload_file)})"
     vector_db_key = upload_file
     if vector_db_key in vector_db_dict.keys():
@@ -115,7 +124,7 @@ def embedding_query(query, kb_file, embedding_top_k):
         doc = searched_doc[0]
         score = searched_doc[1]
         # print(f"{score} : {doc.page_content}")
-        if score < config.embedding_score_threshold:
+        if score < embedding_score_threshold:
             continue
         docs.append(doc)
     logger.info(f"[embedding] fetched {len(docs)} docs")
@@ -125,55 +134,76 @@ def embedding_query(query, kb_file, embedding_top_k):
 def rerank_documents(query, docs, rerank_top_k):
     if len(docs) < 2:
         return docs
-    if not rerank_model:
+    if not api_rerank:
         return docs[:rerank_top_k]
-
-    pairs = []
-    for idx, document in enumerate(docs):
-        pairs.append([query, document.page_content])
-    rerank_docs = []
-    with torch.no_grad():
-        inputs = rerank_tokenizer(pairs, padding=True, truncation=True, return_tensors='pt', max_length=512).to(config.device)
-        scores = rerank_model(**inputs, return_dict=True).logits.view(-1, ).float()
-        scores = torch.sigmoid(scores)
-        scores = scores.tolist()
     
-    # print(f"scores: {scores}")
-    combined_list = list(zip(docs, scores))
-    sorted_combined_list = sorted(combined_list, key=lambda x: x[1], reverse=True)
-    for idx, item in enumerate(sorted_combined_list):
-        if idx >= rerank_top_k:
-            break
-        document = item[0]
-        rerank_docs.append(document)
-    logger.info(f"[rerank] fetched {len(rerank_docs)} docs")
-    return rerank_docs
+    doc_contents = []
+    for doc in docs:
+        doc_contents.append(doc.page_content)
+    
+    server_url = api_base
+    model_name = api_rerank
+
+    if not server_url:
+        raise RuntimeError("server_url is required")
+    if not model_name:
+        raise RuntimeError("model_name is required")
+
+    url = server_url
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+    data = {
+        "model": model_name,
+        "query": query,
+        "documents": doc_contents,
+        "top_n": rerank_top_k,
+        "return_documents": True
+    }
+
+    try:
+        response = requests.post(str(URL(url) / "rerank"), headers=headers, data=json.dumps(data), timeout=60)
+        response.raise_for_status()
+        results = response.json()
+        rerank_documents = []
+        for result in results["results"]:
+            document = result.get("document", {})
+            if document:
+                if isinstance(document, dict):
+                    text = document.get("text")
+                elif isinstance(document, str):
+                    text = document
+            rerank_document = RerankDocument(
+                index=result["index"],
+                text=text,
+                score=result["relevance_score"],
+            )
+            rerank_documents.append(rerank_document)
+
+        rerank_docs = []
+        for rerank_document in rerank_documents:
+            rerank_docs.append(Document(page_content=rerank_document.text))
+        
+        logger.info(f"[rerank] fetched {len(rerank_docs)} docs")
+        return rerank_docs
+
+    except httpx.HTTPStatusError as e:
+        raise RuntimeError(str(e))
 
 
 def init_embeddings():
     global embedding_model
 
-    logger.info(f"Load embedding from {config.embedding_model_full}")
-    embedding_model = HuggingFaceEmbeddings(
-        model_name=config.embedding_model_full,
-        model_kwargs={"device": config.device},
-        encode_kwargs={'normalize_embeddings': True},
+    logger.info(f"Using embedding: {api_embedding}")
+    embedding_model = OpenAIEmbeddings(
+        model = api_embedding,
+        base_url = api_base,
+        api_key= api_key,
+        check_embedding_ctx_length = False,
     )
 
 
 def init_reranker():
-    global rerank_model, rerank_tokenizer
-
-    logger.info(f"Load reranker from {config.rerank_model_full}")
-
-    if config.rerank_model_full:
-        rerank_tokenizer = AutoTokenizer.from_pretrained(
-            config.rerank_model_full,
-            device_map=config.device)
-        rerank_model = AutoModelForSequenceClassification.from_pretrained(
-            config.rerank_model_full,
-            device_map=config.device)
-        rerank_model = rerank_model.eval()
+    logger.info(f"Using reranker: {api_rerank}")
 
 
 def custom_relevance_score_fn(distance: float) -> float:

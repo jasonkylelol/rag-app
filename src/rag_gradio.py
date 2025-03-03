@@ -28,26 +28,39 @@ def generate_kb_prompt(chat_history, kb_file, embedding_top_k, rerank_top_k) -> 
     
     knowledge = ""
     for idx, document in enumerate(rerank_docs):
-        knowledge = f"{knowledge}\n{document.page_content}"
+        knowledge = f"{knowledge}\n\n{document.page_content}"
     knowledge = knowledge.strip()
     # logger.info(f"KB knowledge:\n{knowledge}")
 
-    system_prompt = f"你是擅长回答问题的智能助手，使用提供的已知信息来回答问题。如果你不知道答案，就说不知道。请保持答案简洁和准确。\n以下是已知信息:\n\n{knowledge}"
+    system_prompt = f"请使用提供的已知信息来回答问题。如果你不知道答案，就说不知道。请保持答案简洁和准确，不要输出与问题不相关的内容。\n以下是已知信息:\n\n{knowledge}"
     history = build_kb_history(chat_history, system_prompt)
     return query, rerank_docs, history
 
 
 def regenerate_question(chat_history):
-    system_prompt = "给定一个聊天记录和与聊天记录有关的用户问题，重新生成一个独立的问题，该问题囊括了聊天记录的关键信息，使得该问题无需聊天记录即可理解。不要回答此问题，只需重新表述此问题，如果无法表述就按原样返回。"
+    system_prompt = "以下是一段聊天记录，请将该聊天记录的最后一个问题，重新表述为一个独立的问题，使得该问题无需整个聊天记录的上下文即可被理解。不要回答此问题，只需重新表述此问题，如果无法表述就按原样返回。"
     
     query = chat_history[-1]["content"]
-    history = build_kb_history(chat_history, system_prompt)
+    history = build_kb_history(chat_history, "")
     if len(history) <= 1:
         return query
     
+    history.append({"role": "user", "content": query})
+    prompt = f"{system_prompt}\n聊天记录如下:\n"
+    for his in history:
+        role = his["role"]
+        content = his["content"]
+        if role == "assistant":
+            prompt += f"答: {content.strip()}\n"
+        if role == "user":
+            prompt += f"问: {content.strip()}\n"
+    # print(f"regenerate_question: {prompt}")
     new_query = ""
-    for new_token in chat_streamer(query, history, 0.1):
+    for new_token in chat_streamer(prompt, [], 0.1):
         new_query += new_token
+    think_pattern = r"<think>.*?</think>"
+    new_query = re.sub(think_pattern, "", new_query, flags=re.DOTALL)
+    new_query = new_query.strip()
     logger.info(f"KB new query: {new_query}")
     return new_query
 
@@ -72,15 +85,18 @@ def build_kb_history(chat_history, system_prompt):
     # history = [item for item in history if not isinstance(item["content"], tuple)]
     history = history[-config.history_dialog_limit:]
     history = copy.deepcopy(history)
-    pattern = r"<details>.*?</details>"
+    details_pattern = r"<details>.*?</details>"
+    # think_pattern = r"<think>.*?</think>"
     for item in history:
         del item["metadata"]
         if item["content"] != "":
-            item["content"] = re.sub(pattern, "", item["content"], flags=re.DOTALL)
-    history.insert(0, {
-        "role": "system",
-        "content": system_prompt,
-    })
+            item["content"] = re.sub(details_pattern, "", item["content"], flags=re.DOTALL)
+            # item["content"] = re.sub(think_pattern, "", item["content"], flags=re.DOTALL)
+    if system_prompt and system_prompt.strip() != "":
+        history.insert(0, {
+            "role": "system",
+            "content": system_prompt,
+        })
     return history
 
 
@@ -137,14 +153,16 @@ def handle_chat(chat_history, temperature,
     for chunk in chat_streamer(query, history, temperature):
         # print(f"chunk: {chunk}")
         generated_text += chunk
+        generated_text = generated_text.replace("<think>", "<details><summary>思考过程</summary><div>")
+        generated_text = generated_text.replace("</think>", "</div></details>")
         yield chat_resp(chat_history, generated_text)
     print(generated_text)
     if len(searched_docs) > 0:
         knowledge = ""
         for idx, doc in enumerate(searched_docs):
-            knowledge = f"{knowledge}{str(doc.page_content).strip()}\n"
+            knowledge = f"{knowledge}{str(doc.page_content).strip()}\n\n"
         knowledge = knowledge.strip()
-        knowledge = html.escape(knowledge)
+        knowledge = knowledge.replace("\n", "<br>")
         generated_text += f"<details><summary>参考信息</summary>{knowledge}</details>"
         yield chat_resp(chat_history, generated_text)
     # print(f"chat_history:\n\n{chat_history}\n\n\n\n")
@@ -156,8 +174,6 @@ def init_llm():
 
 def chat_streamer(query, history, temperature):
     for chunk in openai_api_stream_chat(query, history, temperature=temperature):
-        if chunk == "<think>" or chunk == "</think>":
-            continue
         yield chunk
 
 

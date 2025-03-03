@@ -11,5 +11,5 @@
 
 ## examples
 ```bash
-LLM_API_BASE=http://192.168.0.20:38060/v1 LLM_API_MODEL=Qwen/Qwen2.5-14B-Instruct LLM_API_KEY=EMPTY CUDA_VISIBLE_DEVICES=1 python3 src/rag_gradio.py
+LLM_API_BASE=http://192.168.0.20:38060/v1 LLM_API_KEY=EMPTY LLM_API_MODEL=Qwen/Qwen2.5-14B-Instruct LLM_API_EMBEDDING=text-embedding LLM_API_RERANK=rerank python3 src/rag_gradio.py
 ```

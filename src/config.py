@@ -7,15 +7,8 @@ server_port = 8061
 api_base = os.getenv("LLM_API_BASE")
 api_key = os.getenv("LLM_API_KEY")
 api_model = os.getenv("LLM_API_MODEL")
-
-model_path = "/root/huggingface/models"
-device = "cuda"
-
-embedding_model_name = "maidalun1020/bce-embedding-base_v1"
-embedding_model_full = f"{model_path}/{embedding_model_name}"
-
-rerank_model_name = "maidalun1020/bce-reranker-base_v1"
-rerank_model_full = f"{model_path}/{rerank_model_name}"
+api_embedding = os.getenv("LLM_API_EMBEDDING")
+api_rerank = os.getenv("LLM_API_RERANK")
 
 max_new_tokens=8192
 top_p=0.1
